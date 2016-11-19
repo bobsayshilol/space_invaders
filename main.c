@@ -3,12 +3,13 @@
 
 
 // Includes
+#define _POSIX_C_SOURCE 199309L	// HACK
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #if LINUX
-	#include <time.h>
 	#include <sys/select.h>
 	#include <unistd.h>
 	#include <termios.h>
@@ -20,13 +21,14 @@
 
 // Defines
 #define WIDTH 20
-#define HEIGHT 5
+#define HEIGHT 15
 #define PLAYER_Y 2
 
 #define LEFT 1
 #define RIGHT 2
 #define FIRE 3
 #define QUIT 4
+#define DIED 5
 
 
 // Types
@@ -58,6 +60,12 @@ enum
 	kGreenBack = 1 << 4,
 	kBlueBack = 1 << 5,
 	
+	kWhiteFront = (kRedFront | kGreenFront | kBlueFront),
+	kBlackFront = kBlack,
+	kWhiteBack = (kRedBack | kGreenBack | kBlueBack),
+	kBlackBack = kBlack,
+	kColourDefault = kWhiteFront | kBlackBack,
+	
 	// 8 bits for metadata
 	kMetaMask = (1 << 8) - 1,
 	kMetaShift = 8,
@@ -67,6 +75,8 @@ enum
 // Statics
 Tile grid[HEIGHT][WIDTH];
 unsigned char playerPos;
+long baseTick;
+int currentTick;
 
 #if LINUX
 struct termios orig_termios;	// taken from http://stackoverflow.com/a/448982
@@ -77,14 +87,16 @@ struct termios orig_termios;	// taken from http://stackoverflow.com/a/448982
 Type GetType(Tile);
 Colour GetColour(Tile);
 MetaData GetMeta(Tile);
+Tile CreateTile(Type, Colour, MetaData);
 void PrintChar(char ch, Colour col);
 void Init(void);
 void Shutdown(void);
 void Draw(void);
 int Update(int*);
 int GetKeyPressed(void);
-void BeginListening();
-void StopListening();
+void BeginListening(void);
+void StopListening(void);
+int AdvanceTick(void);
 
 
 // Main entry point
@@ -189,7 +201,7 @@ MetaData GetMeta(Tile sq)
 void PrintChar(char ch, Colour col)
 {
 	// Don't update more often than we need
-	static Colour currentColour = (kRedFront | kGreenFront | kBlueFront) << kColourShift;	// default is white front, black back
+	static Colour currentColour = kColourDefault << kColourShift;
 	
 	if (currentColour != col)
 	{
@@ -213,11 +225,7 @@ void Init()
 	BeginListening();
 	
 	// Add a basic border
-	const Tile borderTile =
-		(kBarrier << kTypeShift) /* barrier */ |
-		((kRedFront | kGreenFront | kBlueFront) << kColourShift) /* white */ |
-		(255 << kMetaShift) /* 255 health so it shouldn't get broken */
-	;
+	const Tile borderTile = CreateTile(kBarrier, kColourDefault, 255);	// 255 health so it shouldn't get broken
 	
 	for (int x=0; x<WIDTH; x++)
 	{
@@ -230,16 +238,19 @@ void Init()
 		grid[y][WIDTH-1] = borderTile;
 	}
 	
-	
 	// Set the player position
-	const Tile playerTile =
-		(kShip << kTypeShift) /* barrier */ |
-		((kRedFront | kGreenFront | kBlueFront) << kColourShift) /* white */ |
-		(5 << kMetaShift) /* 5 health */
-	;
-	
 	playerPos = WIDTH / 2;
-	grid[PLAYER_Y][playerPos] = playerTile;
+	grid[PLAYER_Y][playerPos] = CreateTile(kShip, kColourDefault, 5);
+	
+	// Setup the base time
+#if LINUX
+	struct timespec spec;
+	clock_gettime(CLOCK_MONOTONIC, &spec);
+	baseTick = (spec.tv_nsec / 1000000ULL) + (spec.tv_sec * 1000);
+#endif
+	
+	// Advance a tick to setup the time keeping
+	AdvanceTick();
 }
 
 
@@ -256,6 +267,7 @@ int Update(int* finished)
 	int button = GetKeyPressed();
 	int changedState = button != 0;
 	
+	// Handle button state
 	switch (button)
 	{
 		case 0:
@@ -288,11 +300,83 @@ int Update(int* finished)
 			}
 			break;
 			
+		case FIRE:
+			// TODO: check we haven't just fired
+			grid[PLAYER_Y+1][playerPos] = CreateTile(kBullet, kColourDefault, 0);
+			break;
+			
 		case QUIT:
 			// We're done
 			*finished = 1;
 			changedState = 0;
 			break;
+	}
+	
+	// Update the objects
+	int delta = AdvanceTick();
+	if (delta && !*finished)
+	{
+		// TODO: not this!
+		for (int y=HEIGHT-2; y>PLAYER_Y; y--)
+		{
+			for (int x=1; x<WIDTH-1; x++)
+			{
+				Tile sq = grid[y][x];
+				switch (GetType(sq))
+				{
+					case kEmpty:
+					case kBarrier:
+						// Nothing to do
+						break;
+						
+					case kShip:
+						// TODO: move it down
+						break;
+						
+					case kBullet:
+					{
+						// Move the bullet up every 20 ticks
+						MetaData ticks = GetMeta(sq) + delta;
+						if (ticks >= 20)
+						{
+							Tile above = grid[y+1][x];
+							switch (GetType(above))
+							{
+								case kEmpty:
+									grid[y+1][x] = CreateTile(kBullet, GetColour(sq), ticks % 20);
+									grid[y][x] = 0;
+									break;
+									
+								case kBarrier:
+									// Ignore the ceiling
+									if (y == HEIGHT-2)
+									{
+										grid[y][x] = 0;
+										break;
+									}
+									// fallthrough
+								case kShip:
+									// TODO: damage
+									break;
+									
+								case kBullet:
+									// This shouldn't happen, so just ignore it and let it queue?
+									break;
+							}
+							
+							// The state changed
+							changedState = 1;
+						}
+						else
+						{
+							// Update the ticks
+							grid[y][x] = CreateTile(kBullet, GetColour(sq), ticks);
+						}
+					}
+					break;
+				}
+			}
+		}
 	}
 	
 	// The state of the game changed
@@ -349,6 +433,7 @@ void BeginListening()
 	tcgetattr(0, &orig_termios);
 	memcpy(&new_termios, &orig_termios, sizeof(new_termios));
 	
+	// TODO: just save this?
 #if 1
 	cfmakeraw(&new_termios);
 #else
@@ -371,5 +456,34 @@ void StopListening()
 	tcsetattr(0, TCSANOW, &orig_termios);
 #endif
 }
+
+
+// Helper to create a tile
+Tile CreateTile(Type ty, Colour col, MetaData meta)
+{
+	return (ty << kTypeShift) | (col << kColourShift) | (meta << kMetaShift);
+}
+
+
+// Advance the current tick
+int AdvanceTick()
+{
+	int oldTime = currentTick;
+	
+#if LINUX
+	struct timespec spec;
+	clock_gettime(CLOCK_MONOTONIC, &spec);
+	currentTick = (spec.tv_nsec / 1000000ULL) + (spec.tv_sec * 1000) - baseTick;
+	
+#else
+ERROR TODO
+#endif
+	
+	// We only deal with 0.01s per tick
+	currentTick /= 10;
+	
+	return currentTick - oldTime;
+}
+
 
 
