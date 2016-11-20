@@ -71,7 +71,7 @@ enum
 	kMetaMask = (1 << 7) - 1,
 	kMetaShift = 8,
 	
-	// High bit of metadata indicates player owned
+	// Final bit indicates player ownership
 	kOwnedShift = 15,
 	kOwned = 1,
 };
@@ -96,7 +96,7 @@ static Type GetType(Tile);
 static Colour GetColour(Tile);
 static MetaData GetMeta(Tile);
 static MetaData GetOwned(Tile);
-static Tile CreateTile(Type, Colour, MetaData);
+static Tile CreateTile(Type, Colour, MetaData, MetaData);
 static void PrintChar(char ch, Colour col);
 static void Init(void);
 static void Shutdown(void);
@@ -169,9 +169,9 @@ void Draw()
 				case kBullet:
 					// Make it look like it's moving up/down
 					if ((meta >= 10) ^ GetOwned(sq))
-						c = '\'';
-					else
 						c = '.';
+					else
+						c = '\'';
 					break;
 			}
 			
@@ -267,7 +267,7 @@ static void Init()
 	BeginListening();
 	
 	// Add a basic border
-	const Tile borderTile = CreateTile(kBarrier, kWhiteFront | kWhiteBack, 255);	// 255 health so it shouldn't get broken
+	const Tile borderTile = CreateTile(kBarrier, kWhiteFront | kWhiteBack, 255, 0);	// 255 health so it shouldn't get broken
 	
 	for (int x=0; x<WIDTH; x++)
 	{
@@ -282,14 +282,14 @@ static void Init()
 	
 	// Set the player position
 	playerPos = WIDTH / 2;
-	grid[PLAYER_Y][playerPos] = CreateTile(kShip, kGreenFront, kOwned);
+	grid[PLAYER_Y][playerPos] = CreateTile(kShip, kGreenFront, 0, kOwned);
 	
 	// Populate the rest of the grid
 	for (int y=HEIGHT-3; y>=HEIGHT/2; y-=2)
 	{
 		for (int x=3; x<WIDTH-3; x+=3)
 		{
-			grid[y][x] = CreateTile(kShip, kBlueFront, 0);
+			grid[y][x] = CreateTile(kShip, kBlueFront, 0, 0);
 		}
 	}
 	
@@ -365,7 +365,7 @@ static int Update(int* finished)
 		case FIRE:
 			if (GetType(grid[PLAYER_Y+1][playerPos]) != kBullet)
 			{
-				grid[PLAYER_Y+1][playerPos] = CreateTile(kBullet, kRedFront, kOwned);
+				grid[PLAYER_Y+1][playerPos] = CreateTile(kBullet, kRedFront, 0, kOwned);
 			}
 			break;
 			
@@ -386,6 +386,7 @@ static int Update(int* finished)
 			for (int x=1; x<WIDTH-1; x++)
 			{
 				Tile sq = grid[y][x];
+				MetaData owned = GetOwned(sq);
 				switch (GetType(sq))
 				{
 					case kEmpty:
@@ -403,11 +404,12 @@ static int Update(int* finished)
 						MetaData ticks = GetMeta(sq) + delta;
 						if (ticks >= 20)
 						{
-							Tile above = grid[y+1][x];
-							switch (GetType(above))
+							int nextY = owned ? (y+1) : (y-1);
+							Tile next = grid[nextY][x];
+							switch (GetType(next))
 							{
 								case kEmpty:
-									grid[y+1][x] = CreateTile(kBullet, GetColour(sq), ticks % 20);
+									grid[nextY][x] = CreateTile(kBullet, GetColour(sq), ticks % 20, owned);
 									grid[y][x] = 0;
 									break;
 									
@@ -420,11 +422,24 @@ static int Update(int* finished)
 									}
 									// fallthrough
 								case kShip:
-									// TODO: damage
-									break;
+								{
+									MetaData health = GetMeta(next);
+									grid[nextY][x] = (health == 0) ? 0 : CreateTile(GetType(next), GetColour(next), health-1, owned);
+									grid[y][x] = 0;
+								}
+								break;
 									
 								case kBullet:
-									// This shouldn't happen, so just ignore it and let it queue?
+									if (owned != GetOwned(next))
+									{
+										// Bullets cancel out
+										grid[y][x] = 0;
+										grid[nextY][x] = 0;
+									}
+									else
+									{
+										// This shouldn't happen, so just ignore it and let it queue?
+									}
 									break;
 							}
 							
@@ -434,7 +449,11 @@ static int Update(int* finished)
 						else
 						{
 							// Update the ticks
-							grid[y][x] = CreateTile(kBullet, GetColour(sq), ticks);
+							grid[y][x] = CreateTile(kBullet, GetColour(sq), ticks, owned);
+							
+							// See if we need to redraw
+							if (ticks >= 10 && ticks - delta < 10)
+								changedState = 1;
 						}
 					}
 					break;
@@ -523,9 +542,9 @@ static void StopListening()
 
 
 // Helper to create a tile
-static Tile CreateTile(Type ty, Colour col, MetaData meta)
+static Tile CreateTile(Type ty, Colour col, MetaData meta, MetaData owned)
 {
-	return (ty << kTypeShift) | (col << kColourShift) | (meta << kMetaShift);
+	return (ty << kTypeShift) | (col << kColourShift) | (meta << kMetaShift) | (owned << kOwnedShift);
 }
 
 
