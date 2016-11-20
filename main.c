@@ -15,6 +15,7 @@
 	#include <termios.h>
 	extern void cfmakeraw (struct termios *);	// HACK
 #else
+	#include <Windows.h>
 	#include <conio.h>
 #endif
 
@@ -80,6 +81,8 @@ int currentTick;
 
 #if LINUX
 struct termios orig_termios;	// taken from http://stackoverflow.com/a/448982
+#else
+HANDLE consoleHandle;
 #endif
 
 
@@ -223,7 +226,6 @@ void PrintChar(char ch, Colour col)
 		}
 		
 #else
-		static HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
 		WORD colour = 0;
 		
 		if (col & kRedFront)	colour |= FOREGROUND_RED;
@@ -233,7 +235,7 @@ void PrintChar(char ch, Colour col)
 		if (col & kGreenBack)	colour |= BACKGROUND_GREEN;
 		if (col & kBlueBack)	colour |= BACKGROUND_BLUE;
 		
-		SetConsoleTextAttribute(console, colour);
+		SetConsoleTextAttribute(consoleHandle, colour);
 #endif
 		
 		currentColour = col;
@@ -279,6 +281,11 @@ void Init()
 	GetSystemTime(&st);
 	currentTick = st.wMilliseconds + st.wSecond - baseTick;
 	
+#endif
+	
+	// Grab the handle to the console on windows
+#if !LINUX
+	consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 #endif
 	
 	// Advance a tick to setup the time keeping
