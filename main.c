@@ -158,8 +158,12 @@ void Draw()
 					break;
 					
 				case kBarrier:
-					// TODO: damage
-					c = '#';
+					if (meta >= 2)
+						c = '#';
+					else if (meta == 1)
+						c = '~';
+					else
+						c = '-';
 					break;
 					
 				case kShip:
@@ -291,6 +295,12 @@ static void Init()
 		{
 			grid[y][x] = CreateTile(kShip, kBlueFront, 0, 0);
 		}
+	}
+	for (int x=2; x<WIDTH-2; x+=4)
+	{
+		// Each wall has 3 health
+		grid[PLAYER_Y+2][x] = CreateTile(kBarrier, kWhiteBack, 2, 0);
+		grid[PLAYER_Y+2][x+1] = CreateTile(kBarrier, kWhiteBack, 2, 0);
 	}
 	
 	// Setup the base time
@@ -424,7 +434,7 @@ static int Update(int* finished)
 								case kShip:
 								{
 									MetaData health = GetMeta(next);
-									grid[nextY][x] = (health == 0) ? 0 : CreateTile(GetType(next), GetColour(next), health-1, owned);
+									grid[nextY][x] = (health == 0) ? 0 : CreateTile(GetType(next), GetColour(next), health-1, GetOwned(next));
 									grid[y][x] = 0;
 								}
 								break;
