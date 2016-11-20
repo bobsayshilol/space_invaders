@@ -31,6 +31,9 @@
 #define QUIT 4
 #define DIED 5
 
+#define SHIP_LEFT -1
+#define SHIP_RIGHT 1
+
 
 // Types
 typedef unsigned short Tile;
@@ -83,6 +86,8 @@ static unsigned char playerPos;
 static long baseTick;
 static int currentTick;
 static Colour currentColour = kColourDefault << kColourShift;
+static int currentShipDirection = SHIP_RIGHT;
+static int shipDirectionTick;
 
 #if LINUX
 static struct termios orig_termios;	// taken from http://stackoverflow.com/a/448982
@@ -390,13 +395,46 @@ static int Update(int* finished)
 	int delta = AdvanceTick();
 	if (delta && !*finished)
 	{
+		int shipDirectionX = 0;
+		int shipDirectionY = 0;
+		
+		// Move the ship every 100 ticks
+		shipDirectionTick += delta;
+		if (shipDirectionTick >= 100)
+		{
+			shipDirectionTick -= 100;
+			
+			// See if we need to move the ships down
+			for (int y=HEIGHT-2; y>PLAYER_Y; y--)
+			{
+				if (GetType(grid[y][1]) && currentShipDirection == SHIP_LEFT)
+				{
+					currentShipDirection = SHIP_RIGHT;
+					shipDirectionY = -1;
+					break;
+				}
+				
+				if (GetType(grid[y][WIDTH-2]) && currentShipDirection == SHIP_RIGHT)
+				{
+					currentShipDirection = SHIP_LEFT;
+					shipDirectionY = -1;
+					break;
+				}
+			}
+			
+			// Nothing on the sides, so keep moving
+			if (!(shipDirectionX || shipDirectionY))
+			{
+				shipDirectionX = currentShipDirection;
+			}
+		}
+		
 		// TODO: not this!
 		for (int y=HEIGHT-2; y>PLAYER_Y; y--)
 		{
 			for (int x=1; x<WIDTH-1; x++)
 			{
 				Tile sq = grid[y][x];
-				MetaData owned = GetOwned(sq);
 				switch (GetType(sq))
 				{
 					case kEmpty:
@@ -405,11 +443,29 @@ static int Update(int* finished)
 						break;
 						
 					case kShip:
-						// TODO: move it down
-						break;
+					{
+						// TODO: make this applicable to bullets too
+						MetaData justMoved = GetMeta(sq);
+						if ((shipDirectionX || shipDirectionY) && !justMoved)
+						{
+							// TODO: collisions with bullets
+							grid[y+shipDirectionY][x+shipDirectionX] = CreateTile(kShip, GetColour(sq), 1, 0);
+							grid[y][x] = 0;
+							
+							changedState = 1;
+						}
+						else if (justMoved)
+						{
+							// Remove the just moved tag
+							grid[y][x] = CreateTile(kShip, GetColour(sq), 0, 0);
+						}
+					}
+					break;
 						
 					case kBullet:
 					{
+						MetaData owned = GetOwned(sq);
+						
 						// Move the bullet up every 20 ticks
 						MetaData ticks = GetMeta(sq) + delta;
 						if (ticks >= 20)
