@@ -21,9 +21,9 @@
 
 
 // Defines
-#define WIDTH 20
-#define HEIGHT 15
-#define PLAYER_Y 2
+#define WIDTH 22
+#define HEIGHT 16
+#define PLAYER_Y 1
 
 #define LEFT 1
 #define RIGHT 2
@@ -67,39 +67,45 @@ enum
 	kBlackBack = kBlack,
 	kColourDefault = kWhiteFront | kBlackBack,
 	
-	// 8 bits for metadata
-	kMetaMask = (1 << 8) - 1,
+	// 7 bits for metadata
+	kMetaMask = (1 << 7) - 1,
 	kMetaShift = 8,
+	
+	// High bit of metadata indicates player owned
+	kOwnedShift = 15,
+	kOwned = 1,
 };
 
 
 // Statics
-Tile grid[HEIGHT][WIDTH];
-unsigned char playerPos;
-long baseTick;
-int currentTick;
+static Tile grid[HEIGHT][WIDTH];
+static unsigned char playerPos;
+static long baseTick;
+static int currentTick;
+static Colour currentColour = kColourDefault << kColourShift;
 
 #if LINUX
-struct termios orig_termios;	// taken from http://stackoverflow.com/a/448982
+static struct termios orig_termios;	// taken from http://stackoverflow.com/a/448982
 #else
-HANDLE consoleHandle;
+static HANDLE consoleHandle;
 #endif
 
 
 // Forward declares
-Type GetType(Tile);
-Colour GetColour(Tile);
-MetaData GetMeta(Tile);
-Tile CreateTile(Type, Colour, MetaData);
-void PrintChar(char ch, Colour col);
-void Init(void);
-void Shutdown(void);
-void Draw(void);
-int Update(int*);
-int GetKeyPressed(void);
-void BeginListening(void);
-void StopListening(void);
-int AdvanceTick(void);
+static Type GetType(Tile);
+static Colour GetColour(Tile);
+static MetaData GetMeta(Tile);
+static MetaData GetOwned(Tile);
+static Tile CreateTile(Type, Colour, MetaData);
+static void PrintChar(char ch, Colour col);
+static void Init(void);
+static void Shutdown(void);
+static void Draw(void);
+static int Update(int*);
+static int GetKeyPressed(void);
+static void BeginListening(void);
+static void StopListening(void);
+static int AdvanceTick(void);
 
 
 // Main entry point
@@ -157,12 +163,15 @@ void Draw()
 					break;
 					
 				case kShip:
-					// TODO: enemy vs player
-					c = 'v';
+					c = (y > PLAYER_Y) ? 'v' : '^';
 					break;
 					
 				case kBullet:
-					c = '.';
+					// Make it look like it's moving up/down
+					if ((meta >= 10) ^ GetOwned(sq))
+						c = '\'';
+					else
+						c = '.';
 					break;
 			}
 			
@@ -180,32 +189,37 @@ void Draw()
 
 
 // Get the type of a tile
-Type GetType(Tile sq)
+static Type GetType(Tile sq)
 {
 	return (sq >> kTypeShift) & kTypeMask;
 }
 
 
 // Get the colour of a tile
-Colour GetColour(Tile sq)
+static Colour GetColour(Tile sq)
 {
 	return (sq >> kColourShift) & kColourMask;
 }
 
 
 // Get the metadata of a tile
-MetaData GetMeta(Tile sq)
+static MetaData GetMeta(Tile sq)
 {
 	return (sq >> kMetaShift) & kMetaMask;
 }
 
 
+// See if the tile is owned by the player
+static MetaData GetOwned(Tile sq)
+{
+	return (sq >> kOwnedShift) & kOwned;
+}
+
+
 // Print a character with a set colour
-void PrintChar(char ch, Colour col)
+static void PrintChar(char ch, Colour col)
 {
 	// Don't update more often than we need
-	static Colour currentColour = kColourDefault << kColourShift;
-	
 	if (currentColour != col)
 	{
 #if LINUX
@@ -247,13 +261,13 @@ void PrintChar(char ch, Colour col)
 
 
 // Initialise everything
-void Init()
+static void Init()
 {
 	// Start listening for input
 	BeginListening();
 	
 	// Add a basic border
-	const Tile borderTile = CreateTile(kBarrier, kRedBack, 255);	// 255 health so it shouldn't get broken
+	const Tile borderTile = CreateTile(kBarrier, kWhiteFront | kWhiteBack, 255);	// 255 health so it shouldn't get broken
 	
 	for (int x=0; x<WIDTH; x++)
 	{
@@ -268,7 +282,16 @@ void Init()
 	
 	// Set the player position
 	playerPos = WIDTH / 2;
-	grid[PLAYER_Y][playerPos] = CreateTile(kShip, kBlueFront, 5);
+	grid[PLAYER_Y][playerPos] = CreateTile(kShip, kGreenFront, kOwned);
+	
+	// Populate the rest of the grid
+	for (int y=HEIGHT-3; y>=HEIGHT/2; y-=2)
+	{
+		for (int x=3; x<WIDTH-3; x+=3)
+		{
+			grid[y][x] = CreateTile(kShip, kBlueFront, 0);
+		}
+	}
 	
 	// Setup the base time
 #if LINUX
@@ -294,14 +317,14 @@ void Init()
 
 
 // Shutdown everything
-void Shutdown()
+static void Shutdown()
 {
 	StopListening();
 }
 
 
 // Check for input and tick the game code
-int Update(int* finished)
+static int Update(int* finished)
 {
 	int button = GetKeyPressed();
 	int changedState = button != 0;
@@ -340,8 +363,10 @@ int Update(int* finished)
 			break;
 			
 		case FIRE:
-			// TODO: check we haven't just fired
-			grid[PLAYER_Y+1][playerPos] = CreateTile(kBullet, kColourDefault, 0);
+			if (GetType(grid[PLAYER_Y+1][playerPos]) != kBullet)
+			{
+				grid[PLAYER_Y+1][playerPos] = CreateTile(kBullet, kRedFront, kOwned);
+			}
 			break;
 			
 		case QUIT:
@@ -424,7 +449,7 @@ int Update(int* finished)
 
 
 // See if a key has been pressed
-int GetKeyPressed()
+static int GetKeyPressed()
 {
 	int pressed = 0;
 	
@@ -463,7 +488,7 @@ int GetKeyPressed()
 
 
 // Setup input handling
-void BeginListening()
+static void BeginListening()
 {
 #if LINUX
 	struct termios new_termios;
@@ -489,7 +514,7 @@ void BeginListening()
 
 
 // Tear down input handling
-void StopListening()
+static void StopListening()
 {
 #if LINUX
 	tcsetattr(0, TCSANOW, &orig_termios);
@@ -498,14 +523,14 @@ void StopListening()
 
 
 // Helper to create a tile
-Tile CreateTile(Type ty, Colour col, MetaData meta)
+static Tile CreateTile(Type ty, Colour col, MetaData meta)
 {
 	return (ty << kTypeShift) | (col << kColourShift) | (meta << kMetaShift);
 }
 
 
 // Advance the current tick
-int AdvanceTick()
+static int AdvanceTick()
 {
 	int oldTime = currentTick;
 	
