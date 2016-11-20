@@ -168,7 +168,7 @@ void Draw()
 		}
 		
 		// Newline shouldn't have a colour
-		PrintChar('\n', kBlack);
+		PrintChar('\n', kColourDefault);
 	}
 	
 	// Start listening again
@@ -206,8 +206,34 @@ void PrintChar(char ch, Colour col)
 	if (currentColour != col)
 	{
 #if LINUX
+		// These map nicely on Linux
+		
+		Colour newFront = col & kWhiteFront;
+		Colour oldFront = currentColour & kWhiteFront;
+		if (newFront != oldFront)
+		{
+			printf("\e[38;5;%im", (int)newFront);
+		}
+		
+		Colour newBack = col & kWhiteBack;
+		Colour oldBack = currentColour & kWhiteBack;
+		if (newBack != oldBack)
+		{
+			printf("\e[48;5;%im", (int)(newBack>>3));
+		}
+		
 #else
-ERROR - need to do this
+		static HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
+		WORD colour = 0;
+		
+		if (col & kRedFront)	colour |= FOREGROUND_RED;
+		if (col & kGreenFront)	colour |= FOREGROUND_GREEN;
+		if (col & kBlueFront)	colour |= FOREGROUND_BLUE;
+		if (col & kRedBack)		colour |= BACKGROUND_RED;
+		if (col & kGreenBack)	colour |= BACKGROUND_GREEN;
+		if (col & kBlueBack)	colour |= BACKGROUND_BLUE;
+		
+		SetConsoleTextAttribute(console, colour);
 #endif
 		
 		currentColour = col;
@@ -225,7 +251,7 @@ void Init()
 	BeginListening();
 	
 	// Add a basic border
-	const Tile borderTile = CreateTile(kBarrier, kColourDefault, 255);	// 255 health so it shouldn't get broken
+	const Tile borderTile = CreateTile(kBarrier, kRedBack, 255);	// 255 health so it shouldn't get broken
 	
 	for (int x=0; x<WIDTH; x++)
 	{
@@ -240,13 +266,19 @@ void Init()
 	
 	// Set the player position
 	playerPos = WIDTH / 2;
-	grid[PLAYER_Y][playerPos] = CreateTile(kShip, kColourDefault, 5);
+	grid[PLAYER_Y][playerPos] = CreateTile(kShip, kBlueFront, 5);
 	
 	// Setup the base time
 #if LINUX
 	struct timespec spec;
 	clock_gettime(CLOCK_MONOTONIC, &spec);
 	baseTick = (spec.tv_nsec / 1000000ULL) + (spec.tv_sec * 1000);
+	
+#else
+	SYSTEMTIME st;
+	GetSystemTime(&st);
+	currentTick = st.wMilliseconds + st.wSecond - baseTick;
+	
 #endif
 	
 	// Advance a tick to setup the time keeping
@@ -476,7 +508,10 @@ int AdvanceTick()
 	currentTick = (spec.tv_nsec / 1000000ULL) + (spec.tv_sec * 1000) - baseTick;
 	
 #else
-ERROR TODO
+	SYSTEMTIME st;
+	GetSystemTime(&st);
+	currentTick = st.wMilliseconds + st.wSecond - baseTick;
+	
 #endif
 	
 	// We only deal with 0.01s per tick
